@@ -243,15 +243,17 @@ async function handleToggleRecording() {
   chrome.action.setBadgeTextColor({ color: '#ffffff' });
   chrome.action.setBadgeBackgroundColor({ color: '#ef4444' });
 
-  // Notify all tabs to start recording
-  const tabs = await chrome.tabs.query({});
-  for (const tab of tabs) {
+  // Get the active tab and scan only that tab
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+  if (activeTab) {
     try {
-      chrome.tabs.sendMessage(tab.id, { type: 'START_RECORDING' }).catch(() => {
+      chrome.tabs.sendMessage(activeTab.id, { type: 'START_RECORDING' }).catch(() => {
         // Tab doesn't have content script loaded, ignore
+        console.log('FormStatus: Could not send message to active tab');
       });
     } catch (e) {
-      // Ignore errors for tabs without content scripts
+      console.error('FormStatus: Error sending message to active tab', e);
     }
   }
 
