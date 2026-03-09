@@ -155,8 +155,8 @@ function scanAndReportForms() {
       fields: []
     };
 
-    // Get all form fields
-    const fields = form.querySelectorAll('input, select, textarea');
+    // Get all form fields including buttons
+    const fields = form.querySelectorAll('input, select, textarea, button');
     fields.forEach((field) => {
       // Skip invisible/internal fields
       const fieldType = field.type || 'text';
@@ -179,8 +179,8 @@ function scanAndReportForms() {
       }
 
       const fieldInfo = {
-        name: field.name || field.id || '',
-        type: field.type || 'text',
+        name: field.name || field.id || field.textContent.trim() || '',
+        type: field.type || field.tagName.toLowerCase(),
         required: field.required || false,
         label: getFieldLabel(field),
         placeholder: field.placeholder || '',
@@ -206,8 +206,20 @@ function scanAndReportForms() {
         fieldInfo.checked = field.checked;
       }
 
+      // For button elements, get the button text
+      if (field.tagName === 'BUTTON') {
+        fieldInfo.text = field.textContent.trim();
+        fieldInfo.name = field.name || field.id || field.textContent.trim() || field.type || 'submit';
+      }
+
       // Skip sensitive fields in reporting
-      if (!isSensitiveField(fieldInfo.name) && fieldInfo.name) {
+      // But always include submit buttons
+      const isSubmitButton = fieldType === 'submit' ||
+                           (field.tagName === 'BUTTON' && fieldInfo.type === 'submit') ||
+                           fieldInfo.name?.toLowerCase().includes('submit') ||
+                           fieldInfo.class?.toLowerCase().includes('submit');
+
+      if (isSubmitButton || (!isSensitiveField(fieldInfo.name) && fieldInfo.name)) {
         formInfo.fields.push(fieldInfo);
       }
     });
