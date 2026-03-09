@@ -235,41 +235,30 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 // Handle toggle recording
 async function handleToggleRecording() {
-  isRecording = !isRecording;
+  // Don't toggle state - recording is instant (scan and download)
+  // Just trigger the recording and reset badge immediately
 
-  if (isRecording) {
-    // Start recording - notify all tabs to start monitoring
-    const tabs = await chrome.tabs.query({});
-    for (const tab of tabs) {
-      try {
-        chrome.tabs.sendMessage(tab.id, { type: 'START_RECORDING' }).catch(() => {
-          // Tab doesn't have content script loaded, ignore
-        });
-      } catch (e) {
-        // Ignore errors for tabs without content scripts
-      }
+  // Show recording state briefly
+  chrome.action.setBadgeText({ text: 'REC' });
+  chrome.action.setBadgeTextColor({ color: '#ffffff' });
+  chrome.action.setBadgeBackgroundColor({ color: '#ef4444' });
+
+  // Notify all tabs to start recording
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    try {
+      chrome.tabs.sendMessage(tab.id, { type: 'START_RECORDING' }).catch(() => {
+        // Tab doesn't have content script loaded, ignore
+      });
+    } catch (e) {
+      // Ignore errors for tabs without content scripts
     }
-
-    // Update badge to show recording state
-    chrome.action.setBadgeText({ text: 'REC' });
-    chrome.action.setBadgeTextColor({ color: '#ffffff' });
-    chrome.action.setBadgeBackgroundColor({ color: '#ef4444' });
-  } else {
-    // Stop recording - notify all tabs
-    const tabs = await chrome.tabs.query({});
-    for (const tab of tabs) {
-      try {
-        chrome.tabs.sendMessage(tab.id, { type: 'STOP_RECORDING' }).catch(() => {
-          // Tab doesn't have content script loaded, ignore
-        });
-      } catch (e) {
-        // Ignore errors for tabs without content scripts
-      }
-    }
-
-    // Reset badge to authenticated state
-    updateBadge();
   }
 
-  return { isRecording };
+  // Reset badge back to authenticated state after 2 seconds
+  setTimeout(() => {
+    updateBadge();
+  }, 2000);
+
+  return { isRecording: false };
 }
