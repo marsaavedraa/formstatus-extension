@@ -80,15 +80,11 @@ function showDashboard(userData) {
 
 async function updateRecordingButton() {
   try {
-    const response = await chrome.runtime.sendMessage({ type: 'GET_AUTH_STATUS' });
+    await chrome.runtime.sendMessage({ type: 'GET_AUTH_STATUS' });
 
-    if (response.isRecording) {
-      recordBtn.classList.add('recording');
-      recordBtn.innerHTML = '<span class="record-icon">■</span> Stop Recording';
-    } else {
-      recordBtn.classList.remove('recording');
-      recordBtn.innerHTML = '<span class="record-icon">●</span> Manual Recording';
-    }
+    // Always show manual recording button (no toggle state needed)
+    recordBtn.classList.remove('recording');
+    recordBtn.innerHTML = '<span class="record-icon">●</span> Manual Recording';
   } catch (error) {
     console.error('Error getting recording status:', error);
   }
@@ -159,17 +155,31 @@ function handleOpenDashboard() {
 
 async function handleRecord() {
   try {
-    const response = await chrome.runtime.sendMessage({ type: 'TOGGLE_RECORDING' });
+    // Show recording state
+    recordBtn.disabled = true;
+    recordBtn.classList.add('recording');
+    recordBtn.innerHTML = '<span class="record-icon">●</span> Recording in progress...';
 
-    if (response.isRecording) {
-      recordBtn.classList.add('recording');
-      recordBtn.innerHTML = '<span class="record-icon">■</span> Stop Recording';
-    } else {
+    // Trigger recording (scan and download) - don't wait for response
+    chrome.runtime.sendMessage({ type: 'TOGGLE_RECORDING' }).catch(err => {
+      console.error('Recording error:', err);
+      // Reset on error
+      recordBtn.disabled = false;
       recordBtn.classList.remove('recording');
       recordBtn.innerHTML = '<span class="record-icon">●</span> Manual Recording';
-    }
+    });
+
+    // Wait briefly then reset button (recording happens in content script)
+    setTimeout(() => {
+      recordBtn.disabled = false;
+      recordBtn.classList.remove('recording');
+      recordBtn.innerHTML = '<span class="record-icon">●</span> Manual Recording';
+    }, 1500);
   } catch (error) {
     console.error('Recording error:', error);
+    recordBtn.disabled = false;
+    recordBtn.classList.remove('recording');
+    recordBtn.innerHTML = '<span class="record-icon">●</span> Manual Recording';
   }
 }
 
