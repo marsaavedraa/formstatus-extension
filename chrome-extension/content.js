@@ -224,7 +224,10 @@ function scanAndReportForms() {
       }
     });
 
-    if (formInfo.fields.length > 0) {
+    // Skip forms that are just search forms
+    const isSearchForm = formInfo.fields.length === 1 && formInfo.fields[0].type === 'search';
+
+    if (formInfo.fields.length > 0 && !isSearchForm) {
       formsData.forms.push(formInfo);
     }
   });
