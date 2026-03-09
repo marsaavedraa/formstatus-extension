@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FormStatus</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <!-- Login View -->
+    <div id="loginView" class="view">
+      <div class="header">
+        <img src="icons/fs-icon.png" alt="FormStatus" class="logo">
+        <h1>FormStatus</h1>
+        <p class="subtitle">Monitor your forms</p>
+      </div>
+
+      <form id="loginForm" class="login-form">
+        <div class="form-group">
+          <label for="email">Email</label>
+          <input type="email" id="email" name="email" required autocomplete="email" placeholder="you@example.com">
+        </div>
+
+        <div class="form-group">
+          <label for="password">Password</label>
+          <input type="password" id="password" name="password" required autocomplete="current-password" placeholder="••••••••">
+        </div>
+
+        <div id="errorMessage" class="error-message" style="display: none;"></div>
+
+        <button type="submit" id="loginBtn" class="btn btn-primary">
+          <span class="btn-text">Sign In</span>
+          <span class="btn-loader" style="display: none;">Signing in...</span>
+        </button>
+
+        <div class="footer-links">
+          <a href="https://app.formstatus.co/forgot-password" target="_blank">Forgot password?</a>
+          <span class="separator">•</span>
+          <a href="https://app.formstatus.co/register" target="_blank">Create account</a>
+        </div>
+      </form>
+    </div>
+
+    <!-- Dashboard View -->
+    <div id="dashboardView" class="view" style="display: none;">
+      <div class="header">
+        <img src="icons/fs-icon.png" alt="FormStatus" class="logo">
+        <h1>FormStatus</h1>
+      </div>
+
+      <div class="user-info">
+        <div class="user-avatar">
+          <span id="userInitials">U</span>
+        </div>
+        <div class="user-details">
+          <p id="userEmail" class="user-email">user@example.com</p>
+          <p id="userStatus" class="user-status">Connected</p>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="recordBtn" class="btn btn-record">
+          <span class="record-icon">●</span>
+          Manual Recording
+        </button>
+        <button id="openDashboardBtn" class="btn btn-secondary">
+          Open Dashboard
+        </button>
+        <button id="logoutBtn" class="btn btn-danger">
+          Sign Out
+        </button>
+      </div>
+    </div>
+
+    <!-- Loading View -->
+    <div id="loadingView" class="view" style="display: none;">
+      <div class="loader-container">
+        <div class="spinner"></div>
+        <p>Loading...</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
