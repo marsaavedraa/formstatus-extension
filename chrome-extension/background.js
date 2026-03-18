@@ -235,32 +235,34 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 // Handle toggle recording
 async function handleToggleRecording() {
-  // Don't toggle state - recording is instant (scan and download)
-  // Just trigger the recording and reset badge immediately
-
-  // Show recording state briefly
-  chrome.action.setBadgeText({ text: 'REC' });
-  chrome.action.setBadgeTextColor({ color: '#ffffff' });
-  chrome.action.setBadgeBackgroundColor({ color: '#ef4444' });
-
-  // Get the active tab and scan only that tab
+  // Get the active tab and send recording command
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
   if (activeTab) {
     try {
-      chrome.tabs.sendMessage(activeTab.id, { type: 'START_RECORDING' }).catch(() => {
-        // Tab doesn't have content script loaded, ignore
-        console.log('FormStatus: Could not send message to active tab');
-      });
+      await chrome.tabs.sendMessage(activeTab.id, { type: 'START_RECORDING' });
+      return { success: true };
     } catch (e) {
       console.error('FormStatus: Error sending message to active tab', e);
+      return { success: false, error: 'Could not communicate with tab' };
     }
   }
 
-  // Reset badge back to authenticated state after 2 seconds
-  setTimeout(() => {
-    updateBadge();
-  }, 2000);
-
-  return { isRecording: false };
+  return { success: false, error: 'No active tab' };
 }
+
+// Listen for recording state changes from content script
+chrome.runtime.onMessage.addListener((request) => {
+  if (request.type === 'RECORDING_STATE_CHANGED') {
+    isRecording = request.isRecording;
+
+    if (isRecording) {
+      chrome.action.setBadgeText({ text: 'REC' });
+      chrome.action.setBadgeTextColor({ color: '#ffffff' });
+      chrome.action.setBadgeBackgroundColor({ color: '#ef4444' });
+    } else {
+      updateBadge();
+    }
+  }
+  return true;
+});

@@ -15,6 +15,9 @@ const recordBtn = document.getElementById('recordBtn');
 const logoutBtn = document.getElementById('logoutBtn');
 const openDashboardBtn = document.getElementById('openDashboardBtn');
 
+// Track recording state
+let isRecording = false;
+
 // Initialize popup
 document.addEventListener('DOMContentLoaded', init);
 
@@ -26,8 +29,8 @@ async function init() {
 
     if (response.isAuthenticated) {
       showDashboard(response.userData);
-      // Check and update recording state
-      updateRecordingButton();
+      // Check recording state from content script
+      await checkRecordingState();
     } else {
       showLogin();
     }
@@ -41,6 +44,21 @@ async function init() {
   recordBtn.addEventListener('click', handleRecord);
   logoutBtn.addEventListener('click', handleLogout);
   openDashboardBtn.addEventListener('click', handleOpenDashboard);
+}
+
+// Check if recording is active
+async function checkRecordingState() {
+  try {
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (activeTab) {
+      const response = await chrome.tabs.sendMessage(activeTab.id, { type: 'GET_RECORDING_STATUS' }).catch(() => null);
+      if (response && response.isRecording) {
+        setRecordingState(true);
+      }
+    }
+  } catch (error) {
+    // Tab might not be ready, ignore
+  }
 }
 
 function showView(viewName) {
@@ -78,15 +96,15 @@ function showDashboard(userData) {
   }
 }
 
-async function updateRecordingButton() {
-  try {
-    await chrome.runtime.sendMessage({ type: 'GET_AUTH_STATUS' });
+function setRecordingState(recording) {
+  isRecording = recording;
 
-    // Always show manual recording button (no toggle state needed)
+  if (recording) {
+    recordBtn.classList.add('recording');
+    recordBtn.innerHTML = '<span class="record-icon">■</span> Stop Recording';
+  } else {
     recordBtn.classList.remove('recording');
     recordBtn.innerHTML = '<span class="record-icon">●</span> Manual Recording';
-  } catch (error) {
-    console.error('Error getting recording status:', error);
   }
 }
 
@@ -96,10 +114,6 @@ function getInitials(name) {
     return (parts[0][0] + parts[1][0]).toUpperCase();
   }
   return name.substring(0, 2).toUpperCase();
-}
-
-function showLoading() {
-  showView('loading');
 }
 
 async function handleLogin(e) {
@@ -154,32 +168,39 @@ function handleOpenDashboard() {
 }
 
 async function handleRecord() {
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+  if (!activeTab) {
+    showError('No active tab found');
+    return;
+  }
+
   try {
-    // Show recording state
-    recordBtn.disabled = true;
-    recordBtn.classList.add('recording');
-    recordBtn.innerHTML = '<span class="record-icon">●</span> Recording in progress...';
+    if (isRecording) {
+      // Stop recording
+      recordBtn.disabled = true;
+      recordBtn.innerHTML = '<span class="record-icon">■</span> Stopping...';
 
-    // Trigger recording (scan and download) - don't wait for response
-    chrome.runtime.sendMessage({ type: 'TOGGLE_RECORDING' }).catch(err => {
-      console.error('Recording error:', err);
-      // Reset on error
-      recordBtn.disabled = false;
-      recordBtn.classList.remove('recording');
-      recordBtn.innerHTML = '<span class="record-icon">●</span> Manual Recording';
-    });
+      await chrome.tabs.sendMessage(activeTab.id, { type: 'STOP_RECORDING' });
+      setRecordingState(false);
 
-    // Wait briefly then reset button (recording happens in content script)
-    setTimeout(() => {
       recordBtn.disabled = false;
-      recordBtn.classList.remove('recording');
-      recordBtn.innerHTML = '<span class="record-icon">●</span> Manual Recording';
-    }, 1500);
+    } else {
+      // Start recording
+      recordBtn.disabled = true;
+      recordBtn.innerHTML = '<span class="record-icon">●</span> Starting...';
+
+      await chrome.tabs.sendMessage(activeTab.id, { type: 'START_RECORDING' });
+      setRecordingState(true);
+
+      // Keep button enabled so user can stop
+      recordBtn.disabled = false;
+    }
   } catch (error) {
     console.error('Recording error:', error);
+    // Reset on error
+    setRecordingState(false);
     recordBtn.disabled = false;
-    recordBtn.classList.remove('recording');
-    recordBtn.innerHTML = '<span class="record-icon">●</span> Manual Recording';
   }
 }
 
@@ -206,3 +227,11 @@ function setLoginLoading(isLoading) {
     btnLoader.style.display = 'none';
   }
 }
+
+// Listen for recording state changes from content script
+chrome.runtime.onMessage.addListener((request) => {
+  if (request.type === 'RECORDING_STATE_CHANGED') {
+    setRecordingState(request.isRecording);
+  }
+  return true;
+});
