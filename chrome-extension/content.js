@@ -533,17 +533,12 @@ function cleanupNavigationDetection() {
 
 // ==================== Event Handlers ====================
 
-// Handle focus events
+// Handle focus events - just track timing, don't record action yet
 function handleFocus(event) {
   if (!recordingState.isActive) return;
 
   const field = event.target;
   const fieldInfo = getTargetInfo(field);
-
-  // Record focus action
-  recordAction('focus', {
-    target: fieldInfo
-  });
 
   // Track focus start time
   recordingState.focusTimers.set(field, Date.now());
@@ -570,7 +565,7 @@ function handleFocus(event) {
   saveRecordingState();
 }
 
-// Handle blur events
+// Handle blur events - record a single field_fill action with complete info
 function handleBlur(event) {
   if (!recordingState.isActive) return;
 
@@ -582,96 +577,86 @@ function handleBlur(event) {
   const focusDuration = focusStart ? Date.now() - focusStart : 0;
   recordingState.focusTimers.delete(field);
 
-  // Record blur action with duration
-  recordAction('blur', {
-    target: fieldInfo,
-    focusDuration: focusDuration
-  });
+  const currentValue = getFieldValue(field);
+  const initialValue = recordingState.fieldInteractions.get(field)?.initialValue || '';
+
+  // Only record if the value actually changed (or it's a select/radio/checkbox)
+  const fieldType = field.type || field.tagName.toLowerCase();
+  const isSelectionField = fieldType === 'select' || fieldType === 'radio' || fieldType === 'checkbox';
+
+  if (currentValue !== initialValue || isSelectionField) {
+    const interaction = recordingState.fieldInteractions.get(field);
+    const inputType = interaction?.lastInputType || 'typing';
+
+    // Record a single combined field_fill action
+    recordAction('field_fill', {
+      target: fieldInfo,
+      fieldFillDetail: {
+        value: currentValue,
+        initialValue: initialValue,
+        inputType: inputType,
+        focusDuration: focusDuration,
+        keystrokeCount: interaction?.keystrokeCount || 0
+      }
+    });
+  }
 
   // Update field interaction
   const interaction = recordingState.fieldInteractions.get(field);
   if (interaction) {
     interaction.totalFocusDuration = (interaction.totalFocusDuration || 0) + focusDuration;
-    interaction.finalValue = getFieldValue(field);
+    interaction.finalValue = currentValue;
   }
 
   saveRecordingState();
 }
 
-// Handle input events (keystroke-level tracking)
+// Handle input events - just track value changes, don't record each keystroke
 function handleInput(event) {
   if (!recordingState.isActive) return;
 
   const field = event.target;
-  const fieldInfo = getTargetInfo(field);
-  const currentValue = field.value;
-  const previousValue = trackedFields.get(field) || '';
 
-  // Determine input type
-  let inputType = 'typing';
-  if (event.inputType) {
-    if (event.inputType === 'insertFromPaste') {
-      inputType = 'paste';
-    } else if (event.inputType.includes('delete')) {
-      inputType = 'delete';
-    } else if (event.inputType.includes('history')) {
-      inputType = 'autocomplete';
-    }
-  }
+  // Just update tracked value, don't record individual keystroke actions
+  trackedFields.set(field, field.value);
 
-  // Calculate character difference
-  const charsAdded = currentValue.length - previousValue.length;
-
-  // Record input action
-  recordAction('input', {
-    target: fieldInfo,
-    inputDetail: {
-      value: currentValue,
-      inputType: inputType,
-      characters: charsAdded
-    }
-  });
-
-  // Update field interaction
+  // Update field interaction stats for analytics only
   const interaction = recordingState.fieldInteractions.get(field);
   if (interaction) {
-    interaction.keystrokeCount = (interaction.keystrokeCount || 0) + Math.abs(charsAdded);
-    interaction.valueChanges.push({
-      timestamp: Date.now(),
-      value: currentValue,
-      inputType: inputType
-    });
+    // Determine input type
+    let inputType = 'typing';
+    if (event.inputType) {
+      if (event.inputType === 'insertFromPaste') {
+        inputType = 'paste';
+      } else if (event.inputType.includes('delete')) {
+        inputType = 'delete';
+      } else if (event.inputType.includes('history')) {
+        inputType = 'autocomplete';
+      }
+    }
+    interaction.keystrokeCount = (interaction.keystrokeCount || 0) + 1;
+    interaction.lastInputType = inputType;
   }
-
-  trackedFields.set(field, currentValue);
-  saveRecordingState();
 }
 
-// Handle change events (select, radio, checkbox)
+// Handle change events (select, radio, checkbox) - record as field_fill
 function handleChange(event) {
   if (!recordingState.isActive) return;
 
   const field = event.target;
   const fieldInfo = getTargetInfo(field);
 
-  let oldValue = trackedFields.get(field);
+  const initialValue = trackedFields.get(field) || '';
   const currentValue = getFieldValue(field);
 
-  let selectedText = '';
-  if (field.tagName === 'SELECT') {
-    const selectedOption = field.options[field.selectedIndex];
-    if (selectedOption) {
-      selectedText = selectedOption.text;
-    }
-  }
-
-  // Record change action
-  recordAction('change', {
+  // Record as field_fill for consistency
+  recordAction('field_fill', {
     target: fieldInfo,
-    changeDetail: {
-      oldValue: oldValue,
-      newValue: currentValue,
-      selectedText: selectedText
+    fieldFillDetail: {
+      value: currentValue,
+      initialValue: initialValue,
+      inputType: 'selection',
+      focusDuration: 0
     }
   });
 
@@ -721,30 +706,62 @@ function handlePaste(event) {
   saveRecordingState();
 }
 
-// Handle keydown events (special keys)
+// Handle keydown events (special keys like Tab)
 function handleKeydown(event) {
   if (!recordingState.isActive) return;
 
   const field = event.target;
-  const fieldInfo = getTargetInfo(field);
 
-  // Track delete/backspace
-  if (event.key === 'Backspace' || event.key === 'Delete') {
-    recordAction('keydown', {
+  // Track Tab key as navigation - record BEFORE the blur happens
+  if (event.key === 'Tab') {
+    const fieldInfo = getTargetInfo(field);
+
+    // Record the current field's value before tabbing away
+    const currentValue = getFieldValue(field);
+    const initialValue = recordingState.fieldInteractions.get(field)?.initialValue || '';
+
+    // If there's a value that was entered, record it first
+    if (currentValue !== initialValue) {
+      const interaction = recordingState.fieldInteractions.get(field);
+      const focusStart = recordingState.focusTimers.get(field);
+      const focusDuration = focusStart ? Date.now() - focusStart : 0;
+
+      recordAction('field_fill', {
+        target: fieldInfo,
+        fieldFillDetail: {
+          value: currentValue,
+          initialValue: initialValue,
+          inputType: interaction?.lastInputType || 'typing',
+          focusDuration: focusDuration,
+          keystrokeCount: interaction?.keystrokeCount || 0
+        }
+      });
+    }
+
+    // Now record the tab navigation action
+    recordAction('tab', {
       target: fieldInfo,
-      keyDetail: {
-        key: event.key,
-        code: event.code
+      tabDetail: {
+        direction: event.shiftKey ? 'backward' : 'forward'
       }
     });
 
-    // Update field interaction
+    // Update field interaction for analytics
     const interaction = recordingState.fieldInteractions.get(field);
     if (interaction) {
       interaction.keystrokeCount = (interaction.keystrokeCount || 0) + 1;
     }
 
     saveRecordingState();
+  }
+
+  // Track delete/backspace (for analytics only, no separate action)
+  if (event.key === 'Backspace' || event.key === 'Delete') {
+    const interaction = recordingState.fieldInteractions.get(field);
+    if (interaction) {
+      interaction.keystrokeCount = (interaction.keystrokeCount || 0) + 1;
+    }
+    // No action recorded - just part of the field_fill that will be recorded on blur
   }
 }
 
@@ -993,10 +1010,8 @@ function buildEnhancedRecordingData() {
   // Calculate statistics
   const stats = {
     totalClicks: recordingState.actions.filter(a => a.type === 'click').length,
-    totalKeystrokes: recordingState.actions.filter(a => a.type === 'input').length +
-                     recordingState.actions.filter(a => a.type === 'keydown').length,
-    totalFocusEvents: recordingState.actions.filter(a => a.type === 'focus').length,
-    totalBlurEvents: recordingState.actions.filter(a => a.type === 'blur').length,
+    totalFieldsFilled: recordingState.actions.filter(a => a.type === 'field_fill').length,
+    totalTabs: recordingState.actions.filter(a => a.type === 'tab').length,
     fieldsInteracted: recordingState.fieldInteractions.size,
     totalActions: recordingState.actions.length
   };
@@ -1139,9 +1154,8 @@ function downloadFormsAsJSON(formsData) {
     actions: [],
     statistics: {
       totalClicks: 0,
-      totalKeystrokes: 0,
-      totalFocusEvents: 0,
-      totalBlurEvents: 0,
+      totalFieldsFilled: 0,
+      totalTabs: 0,
       fieldsInteracted: 0,
       totalActions: 0,
       averageFieldInteractionTime: 0
