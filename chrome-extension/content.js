@@ -459,7 +459,217 @@ function handleNavigation(from, to) {
     actions: []
   };
 
+  // Re-attach event listeners to new page's forms
+  reattachEventListeners();
+
   saveRecordingState();
+}
+
+// ==================== SPA Page Transition Detection ====================
+
+// Track currently visible page elements for multi-page forms
+let visiblePageElements = new Set();
+let pageTransitionObserver = null;
+
+// Detect SPA page transitions (Forminator, WPForms, etc.)
+function setupSPATransitionDetection() {
+  if (pageTransitionObserver) return;
+
+  // Use MutationObserver to detect page transitions
+  pageTransitionObserver = new MutationObserver((mutations) => {
+    if (!recordingState.isActive) return;
+
+    // Check for aria-hidden or hidden attribute changes on page containers
+    for (const mutation of mutations) {
+      if (mutation.type === 'attributes' &&
+          (mutation.attributeName === 'aria-hidden' ||
+           mutation.attributeName === 'hidden' ||
+           mutation.attributeName === 'class')) {
+
+        const target = mutation.target;
+
+        // Check if this is a page container becoming visible
+        const isNowVisible = isElementVisible(target);
+        const wasVisible = visiblePageElements.has(target);
+
+        if (isNowVisible && !wasVisible) {
+          // New page became visible - handle page transition
+          handleSPAPageTransition(target);
+        }
+
+        // Update visibility tracking
+        if (isNowVisible) {
+          visiblePageElements.add(target);
+        } else {
+          visiblePageElements.delete(target);
+        }
+      }
+    }
+  });
+
+  // Start observing
+  pageTransitionObserver.observe(document.body, {
+    attributes: true,
+    attributeFilter: ['aria-hidden', 'hidden', 'class'],
+    subtree: true
+  });
+
+  // Initialize visible elements
+  scanVisiblePageElements();
+}
+
+// Check if an element is visible
+function isElementVisible(element) {
+  if (!element) return false;
+
+  const style = window.getComputedStyle(element);
+  const ariaHidden = element.getAttribute('aria-hidden');
+  const hasHiddenAttr = element.hasAttribute('hidden');
+
+  return style.display !== 'none' &&
+         style.visibility !== 'hidden' &&
+         ariaHidden !== 'true' &&
+         !hasHiddenAttr &&
+         element.offsetParent !== null;
+}
+
+// Scan for currently visible page elements
+function scanVisiblePageElements() {
+  visiblePageElements.clear();
+
+  // Find Forminator page containers
+  const forminatorPages = document.querySelectorAll('[role="tabpanel"].forminator-pagination, .forminator-pagination > div');
+  forminatorPages.forEach(page => {
+    if (isElementVisible(page)) {
+      visiblePageElements.add(page);
+    }
+  });
+
+  // Find WPForms page containers
+  const wpformsPages = document.querySelectorAll('.wpforms-page');
+  wpformsPages.forEach(page => {
+    if (isElementVisible(page)) {
+      visiblePageElements.add(page);
+    }
+  });
+
+  // Find other common multi-page form containers
+  const otherPages = document.querySelectorAll('[data-page], .form-page, .step-page, [role="page"]');
+  otherPages.forEach(page => {
+    if (isElementVisible(page)) {
+      visiblePageElements.add(page);
+    }
+  });
+}
+
+// Handle SPA page transition
+function handleSPAPageTransition(newPageElement) {
+  if (!recordingState.isActive) return;
+
+  console.log('FormStatus: SPA page transition detected', newPageElement);
+
+  // Finalize current page
+  if (recordingState.currentPage) {
+    recordingState.currentPage.endTime = Date.now();
+    recordingState.currentPage.duration = recordingState.currentPage.endTime - recordingState.currentPage.startTime;
+    recordingState.pages.push(recordingState.currentPage);
+  }
+
+  // Record page transition action
+  recordAction('page_transition', {
+    transitionDetail: {
+      pageType: newPageElement.className || newPageElement.role || 'unknown',
+      transitionType: 'spa'
+    }
+  });
+
+  // Start new page
+  recordingState.currentPage = {
+    url: window.location.href,
+    domain: window.location.hostname,
+    pageTitle: document.title,
+    startTime: Date.now(),
+    actions: []
+  };
+
+  // Record page load action for new page
+  recordAction('page_load', {
+    pageDetail: {
+      url: window.location.href,
+      pageTitle: document.title,
+      spaTransition: true
+    }
+  });
+
+  // Re-attach event listeners to newly visible fields
+  reattachEventListeners();
+
+  saveRecordingState();
+}
+
+// Re-attach event listeners to all form fields (for SPA page transitions)
+function reattachEventListeners() {
+  console.log('FormStatus: Re-attaching event listeners after page transition');
+
+  // ALWAYS re-scan forms to get fresh element references
+  // After SPA page transitions, old element references are stale
+  recordedFormData = scanForms();
+
+  if (!recordedFormData || !recordedFormData.forms) {
+    console.warn('FormStatus: No forms found after page transition');
+    return;
+  }
+
+  console.log(`FormStatus: Found ${recordedFormData.forms.length} form(s) to re-attach listeners`);
+
+  // Attach listeners to all form fields
+  recordedFormData.forms.forEach(formInfo => {
+    formInfo.fields.forEach(fieldInfo => {
+      const field = fieldInfo._element;
+      if (!field) return;
+
+      // Skip if already has listeners
+      if (field._hasFormStatusListeners) return;
+
+      const fieldType = field.type || field.tagName.toLowerCase();
+      const isButton = fieldType === 'submit' || fieldType === 'button' || field.tagName === 'BUTTON';
+
+      if (isButton) {
+        field.addEventListener('click', handleButtonClick, true);
+        recordingEventListeners.push({ element: field, type: 'click', handler: handleButtonClick, capture: true });
+        console.log(`FormStatus: Attached click listener to button: ${fieldInfo.fieldLabel || fieldInfo.name}`);
+      } else {
+        field.addEventListener('focus', handleFocus);
+        field.addEventListener('blur', handleBlur);
+        field.addEventListener('input', handleInput);
+        field.addEventListener('change', handleChange);
+        field.addEventListener('click', handleFieldClick);
+        field.addEventListener('paste', handlePaste);
+        field.addEventListener('keydown', handleKeydown);
+
+        recordingEventListeners.push({ element: field, type: 'focus', handler: handleFocus });
+        recordingEventListeners.push({ element: field, type: 'blur', handler: handleBlur });
+        recordingEventListeners.push({ element: field, type: 'input', handler: handleInput });
+        recordingEventListeners.push({ element: field, type: 'change', handler: handleChange });
+        recordingEventListeners.push({ element: field, type: 'click', handler: handleFieldClick });
+        recordingEventListeners.push({ element: field, type: 'paste', handler: handlePaste });
+        recordingEventListeners.push({ element: field, type: 'keydown', handler: handleKeydown });
+        console.log(`FormStatus: Attached listeners to field: ${fieldInfo.fieldLabel || fieldInfo.name}`);
+      }
+
+      // Mark as having listeners
+      field._hasFormStatusListeners = true;
+    });
+  });
+}
+
+// Cleanup SPA transition detection
+function cleanupSPATransitionDetection() {
+  if (pageTransitionObserver) {
+    pageTransitionObserver.disconnect();
+    pageTransitionObserver = null;
+  }
+  visiblePageElements.clear();
 }
 
 // Setup navigation detection
@@ -843,6 +1053,9 @@ function startManualRecording() {
   // Setup navigation detection for multi-page forms
   setupNavigationDetection();
 
+  // Setup SPA page transition detection
+  setupSPATransitionDetection();
+
   // Record initial page load action
   recordAction('page_load', {
     pageDetail: {
@@ -852,10 +1065,28 @@ function startManualRecording() {
   });
 
   // Add enhanced event listeners to all form fields
+  attachEventListenersToForms();
+
+  // Save initial state
+  saveRecordingState();
+
+  // Notify background script of recording state
+  chrome.runtime.sendMessage({
+    type: 'RECORDING_STATE_CHANGED',
+    isRecording: true
+  });
+
+  return { success: true, isRecording: true };
+}
+
+// Attach event listeners to all form fields
+function attachEventListenersToForms() {
+  if (!recordedFormData || !recordedFormData.forms) return;
+
   recordedFormData.forms.forEach(formInfo => {
     formInfo.fields.forEach(fieldInfo => {
       const field = fieldInfo._element;
-      if (!field) return;
+      if (!field || field._hasFormStatusListeners) return;
 
       const fieldType = field.type || field.tagName.toLowerCase();
       const isButton = fieldType === 'submit' || fieldType === 'button' || field.tagName === 'BUTTON';
@@ -882,11 +1113,14 @@ function startManualRecording() {
         recordingEventListeners.push({ element: field, type: 'paste', handler: handlePaste });
         recordingEventListeners.push({ element: field, type: 'keydown', handler: handleKeydown });
       }
+
+      // Mark as having listeners to avoid duplicates
+      field._hasFormStatusListeners = true;
     });
 
     // Add form submit listener as backup
     const formElement = formInfo._formElement;
-    if (formElement) {
+    if (formElement && !formElement._hasFormStatusListeners) {
       const submitHandler = (e) => {
         if (!recordingState.isActive) return;
         console.log('FormStatus: Form submit detected');
@@ -901,19 +1135,9 @@ function startManualRecording() {
       };
       formElement.addEventListener('submit', submitHandler);
       recordingEventListeners.push({ element: formElement, type: 'submit', handler: submitHandler });
+      formElement._hasFormStatusListeners = true;
     }
   });
-
-  // Save initial state
-  saveRecordingState();
-
-  // Notify background script of recording state
-  chrome.runtime.sendMessage({
-    type: 'RECORDING_STATE_CHANGED',
-    isRecording: true
-  });
-
-  return { success: true, isRecording: true };
 }
 
 // Get the current value of a field
@@ -960,6 +1184,9 @@ function stopManualRecording() {
 
     // Cleanup navigation detection
     cleanupNavigationDetection();
+
+    // Cleanup SPA transition detection
+    cleanupSPATransitionDetection();
 
     // Finalize current page
     if (recordingState.currentPage) {
@@ -1286,6 +1513,9 @@ async function initializeContentScript() {
 
     // Re-setup navigation detection
     setupNavigationDetection();
+
+    // Setup SPA transition detection for resumed session
+    setupSPATransitionDetection();
 
     // Notify background script
     chrome.runtime.sendMessage({
