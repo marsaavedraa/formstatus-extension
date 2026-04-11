@@ -17,6 +17,7 @@ let recordingState = {
   actions: [],
   pages: [],
   currentPage: null,
+  pageIndex: 0, // Track which page of multi-page form we're on
   fieldInteractions: new Map(),
   focusTimers: new Map(), // field -> focus start time
   actionCounter: 0,
@@ -333,6 +334,7 @@ function recordAction(type, details) {
     timestamp: Date.now(),
     relativeTime: getRelativeTime(),
     pageUrl: window.location.href,
+    pageIndex: recordingState.pageIndex || 0, // Track which page this action belongs to
     ...details
   };
   recordingState.actions.push(action);
@@ -449,6 +451,9 @@ function handleNavigation(from, to) {
       navigationType: 'page_change'
     }
   });
+
+  // Increment page index for multi-page form tracking
+  recordingState.pageIndex = (recordingState.pageIndex || 0) + 1;
 
   // Start new page
   recordingState.currentPage = {
@@ -568,43 +573,81 @@ function handleSPAPageTransition(newPageElement) {
 
   console.log('FormStatus: SPA page transition detected', newPageElement);
 
-  // Finalize current page
-  if (recordingState.currentPage) {
-    recordingState.currentPage.endTime = Date.now();
-    recordingState.currentPage.duration = recordingState.currentPage.endTime - recordingState.currentPage.startTime;
-    recordingState.pages.push(recordingState.currentPage);
+  // Extract the page/step number from Forminator classes
+  // Forminator uses classes like "forminator-step-0", "forminator-step-1", "forminator-step-2"
+  let newPageIndex = recordingState.pageIndex || 0;
+  const classList = newPageElement.className || '';
+
+  // Try to extract step number from Forminator classes
+  const stepMatch = classList.match(/forminator-step-(\d+)/);
+  if (stepMatch) {
+    newPageIndex = parseInt(stepMatch[1], 10);
+    console.log('FormStatus: Detected Forminator step', newPageIndex);
+  } else {
+    // For other form types, try to extract page number from data-page attribute
+    const dataPage = newPageElement.getAttribute('data-page');
+    if (dataPage !== null) {
+      newPageIndex = parseInt(dataPage, 10);
+    } else {
+      // Fallback: increment page index only for meaningful transitions
+      // Skip hover, focus, and other micro-transitions
+      const isMeaningfulTransition =
+        classList.includes('forminator-pagination') ||  // Page navigation
+        classList.includes('forminator-step') ||          // Step change
+        classList.includes('current') ||                   // Current page marker
+        classList.includes('active');                      // Active page marker
+
+      if (isMeaningfulTransition) {
+        newPageIndex = (recordingState.pageIndex || 0) + 1;
+      }
+    }
   }
 
-  // Record page transition action
-  recordAction('page_transition', {
-    transitionDetail: {
-      pageType: newPageElement.className || newPageElement.role || 'unknown',
-      transitionType: 'spa'
+  // Only record transition if page index actually changed
+  if (newPageIndex !== recordingState.pageIndex) {
+    console.log('FormStatus: Page index changed from', recordingState.pageIndex, 'to', newPageIndex);
+
+    // Finalize current page
+    if (recordingState.currentPage) {
+      recordingState.currentPage.endTime = Date.now();
+      recordingState.currentPage.duration = recordingState.currentPage.endTime - recordingState.currentPage.startTime;
+      recordingState.pages.push(recordingState.currentPage);
     }
-  });
 
-  // Start new page
-  recordingState.currentPage = {
-    url: window.location.href,
-    domain: window.location.hostname,
-    pageTitle: document.title,
-    startTime: Date.now(),
-    actions: []
-  };
+    // Update page index
+    recordingState.pageIndex = newPageIndex;
 
-  // Record page load action for new page
-  recordAction('page_load', {
-    pageDetail: {
+    // Record page transition action
+    recordAction('page_transition', {
+      transitionDetail: {
+        pageType: newPageElement.className || newPageElement.role || 'unknown',
+        transitionType: 'spa'
+      }
+    });
+
+    // Start new page
+    recordingState.currentPage = {
       url: window.location.href,
+      domain: window.location.hostname,
       pageTitle: document.title,
-      spaTransition: true
-    }
-  });
+      startTime: Date.now(),
+      actions: []
+    };
 
-  // Re-attach event listeners to newly visible fields
-  reattachEventListeners();
+    // Record page load action for new page
+    recordAction('page_load', {
+      pageDetail: {
+        url: window.location.href,
+        pageTitle: document.title,
+        spaTransition: true
+      }
+    });
 
-  saveRecordingState();
+    // Re-attach event listeners to newly visible fields
+    reattachEventListeners();
+
+    saveRecordingState();
+  }
 }
 
 // Re-attach event listeners to all form fields (for SPA page transitions)
@@ -854,24 +897,162 @@ function handleChange(event) {
   if (!recordingState.isActive) return;
 
   const field = event.target;
-  const fieldInfo = getTargetInfo(field);
+  const fieldType = field.type || field.tagName.toLowerCase();
 
-  const initialValue = trackedFields.get(field) || '';
-  const currentValue = getFieldValue(field);
+  // For radio/checkbox groups, record ALL options in the group
+  if (fieldType === 'radio' || fieldType === 'checkbox') {
+    const groupInfo = getRadioCheckboxGroupInfo(field);
 
-  // Record as field_fill for consistency
-  recordAction('field_fill', {
-    target: fieldInfo,
-    fieldFillDetail: {
-      value: currentValue,
-      initialValue: initialValue,
-      inputType: 'selection',
-      focusDuration: 0
-    }
+    // Record each option in the group with its checked state
+    groupInfo.options.forEach((option) => {
+      // For checkboxes: value is the checked state (true/false)
+      // For radios: value is the checked state (only one can be true)
+      const isChecked = option.checked || false;
+      recordAction('field_fill', {
+        target: {
+          elementType: 'input',
+          fieldName: groupInfo.name,
+          fieldId: option.id,
+          fieldLabel: option.label,
+          selector: option.selector,
+          fieldType: fieldType,
+          groupName: groupInfo.groupLabel,
+          groupId: option.groupId
+        },
+        fieldFillDetail: {
+          value: isChecked,
+          initialValue: isChecked,
+          inputType: 'selection',
+          focusDuration: 0
+        }
+      });
+    });
+
+    // Also record the click action for the clicked element
+    const fieldInfo = getTargetInfo(field);
+    recordAction('click', {
+      target: {
+        ...fieldInfo,
+        groupName: groupInfo.groupLabel,
+        groupId: groupInfo.groupId
+      }
+    });
+
+    // Track that we've recorded this group to avoid duplicates
+    const groupKey = `radio_checkbox_${groupInfo.name}`;
+    trackedFields.set(groupKey, true);
+
+  } else {
+    // For non-radio/checkbox fields, use the original logic
+    const fieldInfo = getTargetInfo(field);
+    const initialValue = trackedFields.get(field) || '';
+    const currentValue = getFieldValue(field);
+
+    // Record as field_fill for consistency
+    recordAction('field_fill', {
+      target: fieldInfo,
+      fieldFillDetail: {
+        value: currentValue,
+        initialValue: initialValue,
+        inputType: 'selection',
+        focusDuration: 0
+      }
+    });
+
+    trackedFields.set(field, currentValue);
+  }
+
+  saveRecordingState();
+}
+
+// Get all options in a radio/checkbox group
+function getRadioCheckboxGroupInfo(field) {
+  const fieldName = field.name;
+  const fieldType = field.type;
+
+  // Find all inputs with the same name (same group)
+  const allOptions = Array.from(document.querySelectorAll(
+    `input[type="${fieldType}"][name="${CSS.escape(fieldName)}"]`
+  ));
+
+  // Get group label from fieldset/legend or surrounding container
+  const groupLabel = getFieldGroupLabel(field);
+  const groupId = field.closest('fieldset')?.id || field.closest('.forminator-field')?.id || '';
+
+  // Build options array with label, value, checked state
+  const options = allOptions.map((option) => {
+    const optionLabel = getRadioCheckboxOptionLabel(option);
+    return {
+      id: option.id || '',
+      selector: getFieldSelector(option),
+      label: optionLabel,
+      value: option.value,
+      checked: option.checked
+    };
   });
 
-  trackedFields.set(field, currentValue);
-  saveRecordingState();
+  return {
+    name: fieldName,
+    type: fieldType,
+    groupLabel: groupLabel,
+    groupId: groupId,
+    options: options
+  };
+}
+
+// Get the label for a single radio/checkbox option
+function getRadioCheckboxOptionLabel(option) {
+  // Try to find associated label
+  if (option.id) {
+    const label = document.querySelector(`label[for="${option.id}"]`);
+    if (label) {
+      // Return label text without the input's value
+      return label.textContent.replace(option.value || '', '').trim();
+    }
+  }
+
+  // Try to find parent label
+  const parentLabel = option.closest('label');
+  if (parentLabel) {
+    return parentLabel.textContent.replace(option.value || '', '').trim();
+  }
+
+  // Use value as fallback
+  return option.value || '';
+}
+
+// Get the group label for a radio/checkbox group
+function getFieldGroupLabel(field) {
+  // Try fieldset > legend
+  const fieldset = field.closest('fieldset');
+  if (fieldset) {
+    const legend = fieldset.querySelector('legend');
+    if (legend) {
+      return legend.textContent.trim();
+    }
+  }
+
+  // Try Forminator-specific structure
+  const forminatorField = field.closest('.forminator-field');
+  if (forminatorField) {
+    const label = forminatorField.querySelector('.forminator-label, .forminator-title, .forminator-group-title');
+    if (label) {
+      return label.textContent.trim();
+    }
+  }
+
+  // Try common patterns for radio/checkbox group labels
+  const parent = field.parentElement;
+  if (parent) {
+    // Look for labels that might be the group label
+    const groupLabel = parent.querySelector('label:first-child, .group-label, .field-label, .form-label');
+    if (groupLabel && !groupLabel.contains(field)) {
+      return groupLabel.textContent.trim();
+    }
+  }
+
+  // Default to field name
+  return field.name || '';
 }
 
 // Handle click events on fields
@@ -1037,6 +1218,7 @@ function startManualRecording() {
       duration: null,
       actions: []
     },
+    pageIndex: 0, // Start on page 0 (first page)
     fieldInteractions: new Map(),
     focusTimers: new Map(),
     actionCounter: 0,
