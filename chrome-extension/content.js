@@ -385,7 +385,7 @@ async function clearRecordingState() {
 
 // Check if a button is a navigation button (next/previous)
 function getNavigationButtonType(button) {
-  const text = (button.textContent || '').toLowerCase().trim();
+  const text = (button.textContent || button.value || '').toLowerCase().trim();
   const classes = (button.className || '').toLowerCase();
   const ariaLabel = (button.getAttribute('aria-label') || '').toLowerCase();
   const name = (button.name || '').toLowerCase();
@@ -418,6 +418,14 @@ function determineButtonPurpose(button) {
 
   // Check if it's explicitly a submit button
   if (button.type === 'submit') {
+    const id = (button.id || '').toLowerCase();
+    const value = (button.value || '').toLowerCase();
+    if (id.includes('submit') && !id.includes('next')) {
+      return 'submit';
+    }
+    if (value === 'submit') {
+      return 'submit';
+    }
     // Check if form action points to same page (likely multi-page)
     const form = button.form || button.closest('form');
     if (form && form.action) {
@@ -545,6 +553,14 @@ function scanVisiblePageElements() {
   // Find Forminator page containers
   const forminatorPages = document.querySelectorAll('[role="tabpanel"].forminator-pagination, .forminator-pagination > div');
   forminatorPages.forEach(page => {
+    if (isElementVisible(page)) {
+      visiblePageElements.add(page);
+    }
+  });
+
+  // Find Gravity Forms page containers
+  const gformPages = document.querySelectorAll('.gform_page');
+  gformPages.forEach(page => {
     if (isElementVisible(page)) {
       visiblePageElements.add(page);
     }
@@ -1163,11 +1179,13 @@ function handleButtonClick(event) {
   const button = event.target;
   const buttonPurpose = determineButtonPurpose(button);
 
+  const buttonText = button.textContent.trim() || button.value?.trim() || '';
+
   const buttonInfo = {
     elementType: button.tagName.toLowerCase(),
     fieldName: button.name || button.id || '',
     fieldId: button.id || '',
-    fieldLabel: button.textContent.trim(),
+    fieldLabel: buttonText,
     selector: getFieldSelector(button)
   };
 
@@ -1175,7 +1193,7 @@ function handleButtonClick(event) {
   recordAction('click', {
     target: buttonInfo,
     buttonDetail: {
-      buttonText: button.textContent.trim(),
+      buttonText: buttonText,
       buttonPurpose: buttonPurpose
     }
   });
@@ -1499,6 +1517,7 @@ function buildEnhancedRecordingData() {
   }
 
   return {
+    startingUrl: recordingState.pages && recordingState.pages[0] ? recordingState.pages[0].url : window.location.href,
     recordingId: recordingState.recordingId,
     recordingType: 'manual-form-recording',
     recordingStart: new Date(recordingState.startTime).toISOString(),
