@@ -8,17 +8,19 @@ let isAuthenticated = false;
 let userData = null;
 let authToken = null;
 let isRecording = false;
+let authReady = null;
 
 // Initialize extension
-chrome.runtime.onInstalled.addListener(() => {
-  console.log('FormStatus extension installed');
-  checkAuthStatus();
-  // Clear any existing cookies on install
-  clearCookies();
+chrome.runtime.onInstalled.addListener((details) => {
+  console.log('FormStatus extension installed:', details.reason);
+  if (details.reason === 'install') {
+    clearCookies();
+  }
+  authReady = checkAuthStatus();
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  checkAuthStatus();
+  authReady = checkAuthStatus();
 });
 
 // Check authentication status on startup
@@ -29,10 +31,9 @@ async function checkAuthStatus() {
     userData = result.userData || null;
     authToken = result.authToken || null;
 
-    // Verify token is still valid
     if (isAuthenticated && authToken) {
-      const isValid = await verifySession();
-      if (!isValid) {
+      const verifyResult = await verifySession();
+      if (verifyResult === 'invalid') {
         await clearAuth();
       }
     }
@@ -46,19 +47,29 @@ async function checkAuthStatus() {
 // Verify token with server
 async function verifySession() {
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
     const response = await fetch(`${API_BASE_URL}/api/extension/user`, {
       method: 'GET',
       credentials: 'omit',
+      signal: controller.signal,
       headers: {
         'Accept': 'application/json',
         'Authorization': `Bearer ${authToken}`
       }
     });
 
-    return response.ok;
+    clearTimeout(timeoutId);
+
+    if (response.status === 401) {
+      return 'invalid';
+    }
+
+    return response.ok ? 'valid' : 'unknown';
   } catch (error) {
-    console.error('Session verification failed:', error);
-    return false;
+    console.warn('Session verification failed (network error), keeping session:', error.message);
+    return 'unknown';
   }
 }
 
@@ -75,11 +86,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.type === 'GET_AUTH_STATUS') {
-    sendResponse({
-      isAuthenticated,
-      userData,
-      isRecording
-    });
+    (async () => {
+      if (authReady) {
+        await authReady;
+      }
+      if (!isAuthenticated) {
+        const result = await chrome.storage.local.get(['isAuthenticated', 'userData', 'authToken']);
+        isAuthenticated = result.isAuthenticated || false;
+        userData = result.userData || null;
+        authToken = result.authToken || null;
+      }
+      sendResponse({
+        isAuthenticated,
+        userData,
+        isRecording
+      });
+    })();
     return true;
   }
 
