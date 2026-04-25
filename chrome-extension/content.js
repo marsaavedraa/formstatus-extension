@@ -391,7 +391,9 @@ function getNavigationButtonType(button) {
   const name = (button.name || '').toLowerCase();
   const id = (button.id || '').toLowerCase();
 
-  const combined = `${text} ${classes} ${ariaLabel} ${name} ${id}`;
+  const dataSubmissionType = (button.getAttribute('data-submission-type') || '').toLowerCase();
+
+  const combined = `${text} ${classes} ${ariaLabel} ${name} ${id} ${dataSubmissionType}`;
 
   const nextPatterns = ['next', 'continue', 'forward', 'proceed', 'step', 'save and continue', 'save & continue', 'continue to'];
   const prevPatterns = ['previous', 'back', 'go back', 'return', 'go back to'];
@@ -420,12 +422,23 @@ function determineButtonPurpose(button) {
   if (button.type === 'submit') {
     const id = (button.id || '').toLowerCase();
     const value = (button.value || '').toLowerCase();
+    const text = (button.textContent || '').toLowerCase().trim();
+
     if (id.includes('submit') && !id.includes('next')) {
       return 'submit';
     }
     if (value === 'submit') {
       return 'submit';
     }
+
+    // Since getNavigationButtonType already returned null, the text doesn't
+    // match navigation patterns (next, continue, etc.). Check for submit-specific
+    // text BEFORE the same-page heuristic to avoid false "next" classification.
+    const submitIndicators = ['submit', 'send', 'finish', 'complete'];
+    if (submitIndicators.some(w => text.includes(w) || value.includes(w))) {
+      return 'submit';
+    }
+
     // Check if form action points to same page (likely multi-page)
     const form = button.form || button.closest('form');
     if (form && form.action) {
@@ -483,6 +496,7 @@ function handleNavigation(from, to) {
 // Track currently visible page elements for multi-page forms
 let visiblePageElements = new Set();
 let pageTransitionObserver = null;
+let dynamicButtonObserver = null;
 
 // Detect SPA page transitions (Forminator, WPForms, etc.)
 function setupSPATransitionDetection() {
@@ -729,6 +743,59 @@ function cleanupSPATransitionDetection() {
     pageTransitionObserver = null;
   }
   visiblePageElements.clear();
+}
+
+function isButtonLikeElement(el) {
+  if (el.tagName === 'BUTTON') return true;
+  if (el.tagName === 'INPUT') {
+    const t = (el.type || '').toLowerCase();
+    return t === 'submit' || t === 'button';
+  }
+  return false;
+}
+
+function attachDynamicButtonListener(button) {
+  if (button._hasFormStatusListeners) return;
+  if (!recordingState.isActive) return;
+
+  button.addEventListener('click', handleButtonClick, true);
+  recordingEventListeners.push({ element: button, type: 'click', handler: handleButtonClick, capture: true });
+  button._hasFormStatusListeners = true;
+}
+
+function setupDynamicButtonObserver() {
+  if (dynamicButtonObserver) return;
+
+  dynamicButtonObserver = new MutationObserver((mutations) => {
+    if (!recordingState.isActive) return;
+
+    for (const mutation of mutations) {
+      for (const node of mutation.addedNodes) {
+        if (node.nodeType !== Node.ELEMENT_NODE) continue;
+
+        if (isButtonLikeElement(node)) {
+          attachDynamicButtonListener(node);
+        }
+
+        const buttons = node.querySelectorAll?.('button, input[type="submit"], input[type="button"]');
+        if (buttons) {
+          buttons.forEach(attachDynamicButtonListener);
+        }
+      }
+    }
+  });
+
+  dynamicButtonObserver.observe(document.body, {
+    childList: true,
+    subtree: true
+  });
+}
+
+function cleanupDynamicButtonObserver() {
+  if (dynamicButtonObserver) {
+    dynamicButtonObserver.disconnect();
+    dynamicButtonObserver = null;
+  }
 }
 
 // Setup navigation detection
@@ -1172,12 +1239,15 @@ function handleKeydown(event) {
   }
 }
 
+let lastButtonPurpose = null;
+
 // Handle button clicks (submit, next, previous)
 function handleButtonClick(event) {
   if (!recordingState.isActive) return;
 
-  const button = event.target;
+  const button = event.target.closest('button, input[type="submit"], input[type="button"]') || event.target;
   const buttonPurpose = determineButtonPurpose(button);
+  lastButtonPurpose = buttonPurpose;
 
   const buttonText = button.textContent.trim() || button.value?.trim() || '';
 
@@ -1256,6 +1326,9 @@ function startManualRecording() {
   // Setup SPA page transition detection
   setupSPATransitionDetection();
 
+  // Setup observer for dynamically injected buttons (Forminator, Elementor, etc.)
+  setupDynamicButtonObserver();
+
   // Record initial page load action
   recordAction('page_load', {
     pageDetail: {
@@ -1323,6 +1396,11 @@ function attachEventListenersToForms() {
     if (formElement && !formElement._hasFormStatusListeners) {
       const submitHandler = (e) => {
         if (!recordingState.isActive) return;
+        if (lastButtonPurpose === 'next' || lastButtonPurpose === 'previous') {
+          lastButtonPurpose = null;
+          return;
+        }
+        lastButtonPurpose = null;
         console.log('FormStatus: Form submit detected');
         recordAction('submit', {
           formDetail: {
@@ -1387,6 +1465,9 @@ function stopManualRecording() {
 
     // Cleanup SPA transition detection
     cleanupSPATransitionDetection();
+
+    // Cleanup dynamic button observer
+    cleanupDynamicButtonObserver();
 
     // Finalize current page
     if (recordingState.currentPage) {
@@ -1689,6 +1770,11 @@ async function initializeContentScript() {
       if (formElement) {
         const submitHandler = () => {
           if (!recordingState.isActive) return;
+          if (lastButtonPurpose === 'next' || lastButtonPurpose === 'previous') {
+            lastButtonPurpose = null;
+            return;
+          }
+          lastButtonPurpose = null;
           console.log('FormStatus: Form submit detected');
           recordAction('submit', {
             formDetail: {
@@ -1717,6 +1803,9 @@ async function initializeContentScript() {
 
     // Setup SPA transition detection for resumed session
     setupSPATransitionDetection();
+
+    // Setup dynamic button observer for resumed session
+    setupDynamicButtonObserver();
 
     // Notify background script
     chrome.runtime.sendMessage({
