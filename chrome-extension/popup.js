@@ -104,7 +104,7 @@ function setRecordingState(recording) {
     recordBtn.innerHTML = '<span class="record-icon">■</span> Stop Recording';
   } else {
     recordBtn.classList.remove('recording');
-    recordBtn.innerHTML = '<span class="record-icon">●</span> Manual Recording';
+    recordBtn.innerHTML = '<span class="record-icon">●</span> Start Recording';
   }
 }
 

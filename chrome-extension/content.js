@@ -164,6 +164,44 @@ function isSensitiveField(fieldName) {
   return sensitive.some(s => lower.includes(s));
 }
 
+function isCaptchaField(field) {
+  const name = (field.name || '').toLowerCase();
+  const id = (field.id || '').toLowerCase();
+  const cls = (field.className && typeof field.className === 'string') ? field.className.toLowerCase() : '';
+  const combined = `${name} ${id} ${cls}`;
+
+  if (
+    combined.includes('g-recaptcha') ||
+    combined.includes('grecaptcha') ||
+    combined.includes('recaptcha') ||
+    combined.includes('h-captcha') ||
+    combined.includes('hcaptcha') ||
+    combined.includes('turnstile') ||
+    combined.includes('cf-turnstile') ||
+    combined.includes('captcha')
+  ) {
+    return true;
+  }
+
+  if (field.tagName === 'TEXTAREA' && name === 'g-recaptcha-response') {
+    return true;
+  }
+
+  if (
+    field.type === 'hidden' &&
+    (name.includes('recaptcha') || name.includes('captcha') || name.includes('turnstile'))
+  ) {
+    return true;
+  }
+
+  const closest = field.closest('.grecaptcha-badge, .h-captcha, [data-sitekey], [data-recaptcha], .captcha, .cf-turnstile');
+  if (closest) {
+    return true;
+  }
+
+  return false;
+}
+
 // Scan all forms on the page and return form data structure
 function scanForms() {
   const forms = document.querySelectorAll('form');
@@ -203,6 +241,10 @@ function scanForms() {
       // Skip fields that are not visible via CSS
       const style = window.getComputedStyle(field);
       if (style.display === 'none' || style.visibility === 'hidden') {
+        return;
+      }
+
+      if (isCaptchaField(field)) {
         return;
       }
 
@@ -1270,19 +1312,168 @@ function handleButtonClick(event) {
 
   saveRecordingState();
 
-  // If it's a final submit, stop recording
+  // If it's a final submit, stop recording but wait for submission to complete before saving
   if (buttonPurpose === 'submit') {
-    event.preventDefault();
-    event.stopPropagation();
-    // Delay stop to capture the click action
-    setTimeout(() => {
-      stopManualRecording();
-    }, 100);
-    return false;
+    isManualRecording = false;
+    recordingState.isActive = false;
+
+    recordingEventListeners.forEach(({ element, type, handler, capture }) => {
+      if (capture) {
+        element.removeEventListener(type, handler, true);
+      } else {
+        element.removeEventListener(type, handler);
+      }
+    });
+    recordingEventListeners = [];
+
+    cleanupNavigationDetection();
+    cleanupSPATransitionDetection();
+    cleanupDynamicButtonObserver();
+
+    chrome.runtime.sendMessage({
+      type: 'RECORDING_STATE_CHANGED',
+      isRecording: false
+    });
+
+    const form = button.closest('form');
+    waitForFormSubmission(form || document.body, button).then(() => {
+      if (recordingState.currentPage) {
+        recordingState.currentPage.endTime = Date.now();
+        recordingState.currentPage.duration = recordingState.currentPage.endTime - recordingState.currentPage.startTime;
+        recordingState.pages.push(recordingState.currentPage);
+      }
+
+      const finalData = buildEnhancedRecordingData();
+      downloadEnhancedRecordingAsJSON(finalData);
+
+      trackedFields.clear();
+      recordedFormData = null;
+      recordingState = {
+        recordingId: null,
+        startTime: null,
+        actions: [],
+        pages: [],
+        currentPage: null,
+        fieldInteractions: new Map(),
+        focusTimers: new Map(),
+        actionCounter: 0,
+        isActive: false
+      };
+
+      clearRecordingState();
+    });
   }
 
   // For navigation buttons, let the navigation happen naturally
   // The navigation detection will handle recording the page change
+}
+
+function waitForFormSubmission(formContainer, submitButton) {
+  return new Promise((resolve) => {
+    let resolved = false;
+    const MAX_WAIT = 20000;
+    const MIN_WAIT = 2000;
+    const startTime = Date.now();
+    let wasLoading = false;
+
+    const done = () => {
+      if (resolved) return;
+      resolved = true;
+      observer.disconnect();
+      clearTimeout(fallbackTimer);
+      window.removeEventListener('beforeunload', onBeforeUnload);
+      setTimeout(resolve, 500);
+    };
+
+    const tryDone = () => {
+      if (resolved) return;
+      if (Date.now() - startTime < MIN_WAIT) return;
+      done();
+    };
+
+    const onBeforeUnload = () => {
+      done();
+    };
+
+    window.addEventListener('beforeunload', onBeforeUnload);
+
+    const isButtonLoading = () => {
+      if (!submitButton || !submitButton.isConnected) return false;
+
+      if (submitButton.disabled) return true;
+
+      const cls = (submitButton.className || '').toLowerCase();
+      if (
+        cls.includes('loading') ||
+        cls.includes('submitting') ||
+        cls.includes('processing') ||
+        cls.includes('spinner') ||
+        cls.includes('is-loading') ||
+        cls.includes('is-submitting') ||
+        cls.includes('gf-disabled') ||
+        cls.includes('disabled')
+      ) return true;
+
+      const text = (submitButton.textContent || submitButton.value || '').toLowerCase().trim();
+      if (
+        text.includes('submitting') ||
+        text.includes('sending') ||
+        text.includes('processing') ||
+        text.includes('please wait') ||
+        text.includes('loading')
+      ) return true;
+
+      const style = window.getComputedStyle(submitButton);
+      if (style.opacity === '0' || style.opacity === '0.5' || style.cursor === 'wait') return true;
+
+      const ariaBusy = submitButton.getAttribute('aria-busy');
+      if (ariaBusy === 'true') return true;
+
+      return false;
+    };
+
+    const observer = new MutationObserver(() => {
+      if (resolved) return;
+
+      if (isButtonLoading()) {
+        wasLoading = true;
+        return;
+      }
+
+      if (wasLoading) {
+        tryDone();
+        return;
+      }
+
+      const responseSelectors = [
+        '[class*="success"]', '[class*="confirm"]', '[class*="thank"]',
+        '[class*="message"]', '[class*="response"]', '[class*="notice"]',
+        '[class*="error"]', '[class*="validation"]', '[class*="alert"]',
+        '.gform_confirmation_wrapper', '.gform_confirmation_message',
+        '.forminator-response-message', '.wpforms-confirmation-container-full',
+        '.wpcf7-response-output', '.nf-response-msg',
+        '.frm_message', '.frm_error_style',
+        '.elementor-message', '.et-pb-contact-message'
+      ];
+
+      for (const sel of responseSelectors) {
+        const el = formContainer.querySelector(sel);
+        if (el && el.offsetParent !== null) {
+          tryDone();
+          return;
+        }
+      }
+    });
+
+    observer.observe(formContainer, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class', 'style', 'disabled', 'aria-busy', 'value']
+    });
+
+    const fallbackTimer = setTimeout(done, MAX_WAIT);
+  });
 }
 
 // ==================== Start Manual Recording ====================
