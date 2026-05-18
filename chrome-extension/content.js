@@ -1382,7 +1382,7 @@ function waitForFormSubmission(formContainer, submitButton) {
       observer.disconnect();
       clearTimeout(fallbackTimer);
       window.removeEventListener('beforeunload', onBeforeUnload);
-      setTimeout(resolve, 500);
+      setTimeout(resolve, 3000);
     };
 
     const tryDone = () => {
