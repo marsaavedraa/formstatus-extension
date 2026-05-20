@@ -357,7 +357,7 @@ function getFieldSelector(element) {
 // Get target information for an element
 function getTargetInfo(element) {
   const fieldType = element.type || element.tagName.toLowerCase();
-  return {
+  const info = {
     elementType: element.tagName.toLowerCase(),
     fieldName: element.name || element.id || '',
     fieldId: element.id || '',
@@ -365,6 +365,14 @@ function getTargetInfo(element) {
     selector: getFieldSelector(element),
     fieldType: fieldType
   };
+
+  if (element.tagName === 'SELECT') {
+    info.options = Array.from(element.querySelectorAll('option'))
+      .filter(opt => opt.value)
+      .map(opt => ({ value: opt.value, text: opt.text }));
+  }
+
+  return info;
 }
 
 // Record an action
