@@ -1,7 +1,6 @@
 // FormStatus Chrome Extension - Background Service Worker
 
-const API_BASE_URL = 'http://localhost:8080';
-// const API_BASE_URL = 'https://app.formstatus.co'; // Production
+const API_BASE_URL = 'https://stg-app.formstatus.co';
 
 // Extension state
 let isAuthenticated = false;
@@ -220,8 +219,9 @@ async function clearAuth() {
 // Clear cookies for localhost
 async function clearCookies() {
   try {
+    const url = new URL(API_BASE_URL);
     const cookies = await chrome.cookies.getAll({
-      domain: 'localhost'
+      domain: url.hostname
     });
 
     for (const cookie of cookies) {

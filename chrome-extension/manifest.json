@@ -10,8 +10,7 @@
     "alarms"
   ],
   "host_permissions": [
-    "http://localhost:8080/*",
-    "https://app.formstatus.co/*"
+    "https://stg-app.formstatus.co/*"
   ],
   "background": {
     "service_worker": "background.js"
