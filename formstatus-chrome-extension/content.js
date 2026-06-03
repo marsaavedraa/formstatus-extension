@@ -491,14 +491,6 @@ function determineButtonPurpose(button) {
       return 'submit';
     }
 
-    // Check if form action points to same page (likely multi-page)
-    const form = button.form || button.closest('form');
-    if (form && form.action) {
-      const formUrl = new URL(form.action, window.location.href);
-      if (formUrl.pathname === window.location.pathname) {
-        return 'next'; // Same page, likely multi-step form
-      }
-    }
     return 'submit';
   }
 
@@ -1280,8 +1272,18 @@ function handleButtonClick(event) {
 
   saveRecordingState();
 
-  // If it's a final submit, stop recording but wait for submission to complete before saving
   if (buttonPurpose === 'submit') {
+    if (recordingState.currentPage) {
+      recordingState.currentPage.endTime = Date.now();
+      recordingState.currentPage.duration = recordingState.currentPage.endTime - recordingState.currentPage.startTime;
+      recordingState.pages.push(recordingState.currentPage);
+      recordingState.currentPage = null;
+    }
+
+    const finalData = buildEnhancedRecordingData();
+
+    chrome.storage.local.set({ 'formstatus_pending_download': finalData });
+
     isManualRecording = false;
     recordingState.isActive = false;
 
@@ -1307,13 +1309,6 @@ function handleButtonClick(event) {
 
     const form = button.closest('form');
     waitForFormSubmission(form || document.body, button).then(() => {
-      if (recordingState.currentPage) {
-        recordingState.currentPage.endTime = Date.now();
-        recordingState.currentPage.duration = recordingState.currentPage.endTime - recordingState.currentPage.startTime;
-        recordingState.pages.push(recordingState.currentPage);
-      }
-
-      const finalData = buildEnhancedRecordingData();
       downloadEnhancedRecordingAsJSON(finalData);
 
       trackedFields.clear();
@@ -1330,6 +1325,7 @@ function handleButtonClick(event) {
         isActive: false
       };
 
+      chrome.storage.local.remove('formstatus_pending_download');
       clearRecordingState();
     });
   }
@@ -1362,7 +1358,11 @@ function waitForFormSubmission(formContainer, submitButton) {
     };
 
     const onBeforeUnload = () => {
-      done();
+      if (resolved) return;
+      resolved = true;
+      observer.disconnect();
+      clearTimeout(fallbackTimer);
+      resolve();
     };
 
     window.addEventListener('beforeunload', onBeforeUnload);
@@ -2015,6 +2015,16 @@ if (document.readyState === 'loading') {
 
 // Main initialization function
 async function initializeContentScript() {
+  const dlResult = await chrome.storage.local.get('formstatus_pending_download');
+  if (dlResult.formstatus_pending_download) {
+    const pendingData = dlResult.formstatus_pending_download;
+    await chrome.storage.local.remove('formstatus_pending_download');
+    downloadEnhancedRecordingAsJSON(pendingData);
+    await clearRecordingState();
+    await checkAuthAndInit();
+    return;
+  }
+
   // Check for and resume active recording session
   const hasActiveRecording = await loadRecordingState();
   if (hasActiveRecording && recordingState.isActive) {
