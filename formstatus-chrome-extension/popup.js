@@ -197,11 +197,27 @@ async function handleRecord() {
       recordBtn.disabled = true;
       recordBtn.innerHTML = '<span class="record-icon">●</span> Starting...';
 
-      await chrome.tabs.sendMessage(activeTab.id, { type: 'START_RECORDING' });
-      setRecordingState(true);
+      const url = activeTab.url || '';
+      if (/^(chrome|edge|about|chrome-extension):/i.test(url)) {
+        showError('Cannot record on this page. Try a regular website.');
+        recordBtn.disabled = false;
+        return;
+      }
 
-      // Keep button enabled so user can stop
-      recordBtn.disabled = false;
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: activeTab.id },
+          files: ['content.js']
+        });
+        await chrome.tabs.sendMessage(activeTab.id, { type: 'START_RECORDING' });
+        setRecordingState(true);
+      } catch (e) {
+        console.error('FormStatus: Failed to inject content script:', e);
+        showError('Could not start recording on this page.');
+        setRecordingState(false);
+      } finally {
+        recordBtn.disabled = false;
+      }
     }
   } catch (error) {
     console.error('Recording error:', error);

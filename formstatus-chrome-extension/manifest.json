@@ -7,6 +7,7 @@
     "storage",
     "cookies",
     "activeTab",
+    "scripting",
     "alarms"
   ],
   "host_permissions": [
@@ -18,13 +19,14 @@
   "background": {
     "service_worker": "background.js"
   },
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
-      "run_at": "document_end"
-    }
-  ],
+  "externally_connectable": {
+    "matches": [
+      "https://app.formstatus.co/*",
+      "https://stg-app.formstatus.co/*",
+      "https://dev-app.formstatus.co/*",
+      "http://localhost:8080/*"
+    ]
+  },
   "options_page": "options.html",
   "action": {
     "default_popup": "popup.html",

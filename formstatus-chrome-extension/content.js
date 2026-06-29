@@ -2015,6 +2015,12 @@ if (document.readyState === 'loading') {
 
 // Main initialization function
 async function initializeContentScript() {
+  // Guard against double-injection (programmatic injection via chrome.scripting)
+  if (window.__formstatusInjected) {
+    return;
+  }
+  window.__formstatusInjected = true;
+
   const dlResult = await chrome.storage.local.get('formstatus_pending_download');
   if (dlResult.formstatus_pending_download) {
     const pendingData = dlResult.formstatus_pending_download;
