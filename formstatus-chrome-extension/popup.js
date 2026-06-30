@@ -198,7 +198,8 @@ async function handleRecord() {
       recordBtn.innerHTML = '<span class="record-icon">●</span> Starting...';
 
       const url = activeTab.url || '';
-      if (/^(chrome|edge|about|chrome-extension):/i.test(url)) {
+      if (/^(chrome|edge|about|chrome-extension|view-source):/i.test(url) ||
+          /^https?:\/\/(chrome|chromewebstore)\.google\.com/i.test(url)) {
         showError('Cannot record on this page. Try a regular website.');
         recordBtn.disabled = false;
         return;

@@ -8,8 +8,6 @@ async function loadApiUrl() {
   API_BASE_URL = result.fs_api_url || DEFAULT_API_URL;
 }
 
-loadApiUrl();
-
 // Extension state
 let isAuthenticated = false;
 let userData = null;
@@ -17,6 +15,16 @@ let authToken = null;
 let isRecording = false;
 let recordingTabId = null;
 let authReady = null;
+
+// MV3 service workers are killed when idle and restarted on demand.
+// On every restart, all in-memory state is lost. Restore critical state
+// from chrome.storage.local immediately on script evaluation.
+(async () => {
+  await loadApiUrl();
+  authReady = checkAuthStatus();
+  const state = await chrome.storage.local.get(['recordingTabId']);
+  recordingTabId = state.recordingTabId || null;
+})();
 
 // Initialize extension
 chrome.runtime.onInstalled.addListener((details) => {
@@ -30,6 +38,16 @@ chrome.runtime.onInstalled.addListener((details) => {
 chrome.runtime.onStartup.addListener(() => {
   authReady = checkAuthStatus();
 });
+
+// Ensure auth state is loaded from storage (handles SW restart mid-session)
+async function ensureAuthState() {
+  if (!authToken) {
+    const result = await chrome.storage.local.get(['isAuthenticated', 'userData', 'authToken']);
+    isAuthenticated = result.isAuthenticated || false;
+    userData = result.userData || null;
+    authToken = result.authToken || null;
+  }
+}
 
 // Check authentication status on startup
 async function checkAuthStatus() {
@@ -209,6 +227,8 @@ async function handleLogin(credentials) {
 
 // Handle logout
 async function handleLogout() {
+  await ensureAuthState();
+
   try {
     await fetch(`${API_BASE_URL}/api/extension/logout`, {
       method: 'POST',
@@ -384,6 +404,12 @@ chrome.runtime.onMessage.addListener((request, sender) => {
     recordingTabId = request.isRecording
       ? (sender.tab && sender.tab.id) || recordingTabId
       : null;
+    // Persist so the tabs.onUpdated re-injection survives SW restarts.
+    if (recordingTabId !== null) {
+      chrome.storage.local.set({ recordingTabId });
+    } else {
+      chrome.storage.local.remove('recordingTabId');
+    }
 
     if (isRecording) {
       chrome.action.setBadgeText({ text: 'REC' });
@@ -400,7 +426,8 @@ chrome.runtime.onMessage.addListener((request, sender) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (recordingTabId !== tabId) return;
   if (changeInfo.status !== 'complete') return;
-  if (!tab.url || /^(chrome|edge|about|chrome-extension):/i.test(tab.url)) return;
+  if (!tab.url || /^(chrome|edge|about|chrome-extension|view-source):/i.test(tab.url) ||
+      /^https?:\/\/(chrome|chromewebstore)\.google\.com/i.test(tab.url)) return;
 
   chrome.scripting.executeScript({
     target: { tabId },
@@ -415,6 +442,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   if (recordingTabId === tabId) {
     recordingTabId = null;
     isRecording = false;
+    chrome.storage.local.remove('recordingTabId');
     updateBadge();
   }
 });
