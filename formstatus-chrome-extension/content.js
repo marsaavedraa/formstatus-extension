@@ -327,6 +327,15 @@ function getRelativeTime() {
 
 // Generate unique CSS selector for an element
 function getFieldSelector(element) {
+  const fieldType = element.type || element.tagName.toLowerCase();
+
+  // For radio/checkbox, prefer a stable [name][value] selector over dynamic IDs.
+  // Forminator and similar builders append a random hash to element IDs that
+  // changes on every page load, making #id selectors useless for replay.
+  if ((fieldType === 'radio' || fieldType === 'checkbox') && element.name && element.value) {
+    return `[name="${element.name}"][value="${element.value}"]`;
+  }
+
   if (element.id) {
     return `#${element.id}`;
   }
@@ -367,6 +376,12 @@ function getTargetInfo(element) {
     selector: getFieldSelector(element),
     fieldType: fieldType
   };
+
+  // Include the value attribute for radio/checkbox so the replay system can
+  // match the correct option without relying on dynamic IDs.
+  if (fieldType === 'radio' || fieldType === 'checkbox') {
+    info.fieldValue = element.value;
+  }
 
   if (element.tagName === 'SELECT') {
     info.options = Array.from(element.querySelectorAll('option'))
@@ -1031,6 +1046,9 @@ function handleChange(event) {
     recordAction('click', {
       target: fieldInfo
     });
+    // Track the value so buildEnhancedRecordingData can include it in the
+    // forms summary (not just in the actions stream).
+    trackedFields.set(field, getFieldValue(field));
   } else {
     const fieldInfo = getTargetInfo(field);
     const initialValue = trackedFields.get(field) || '';
@@ -1280,6 +1298,10 @@ function handleButtonClick(event) {
       recordingState.currentPage = null;
     }
 
+    // Fresh scan so the forms summary reflects the latest field values and
+    // checked states (page-transition rescans may be stale by this point).
+    recordedFormData = scanForms();
+
     const finalData = buildEnhancedRecordingData();
 
     chrome.storage.local.set({ 'formstatus_pending_download': finalData });
@@ -1337,8 +1359,8 @@ function handleButtonClick(event) {
 function waitForFormSubmission(formContainer, submitButton) {
   return new Promise((resolve) => {
     let resolved = false;
-    const MAX_WAIT = 20000;
-    const MIN_WAIT = 2000;
+    const MAX_WAIT = 6000;
+    const MIN_WAIT = 1000;
     const startTime = Date.now();
     let wasLoading = false;
 
@@ -1348,7 +1370,7 @@ function waitForFormSubmission(formContainer, submitButton) {
       observer.disconnect();
       clearTimeout(fallbackTimer);
       window.removeEventListener('beforeunload', onBeforeUnload);
-      setTimeout(resolve, 3000);
+      setTimeout(resolve, 500);
     };
 
     const tryDone = () => {
@@ -1765,6 +1787,10 @@ function stopManualRecording() {
       recordingState.pages.push(recordingState.currentPage);
     }
 
+    // Fresh scan so the forms summary reflects the latest field values and
+    // checked states (page-transition rescans may be stale by this point).
+    recordedFormData = scanForms();
+
     // Build enhanced final data
     const finalData = buildEnhancedRecordingData();
 
@@ -1874,9 +1900,17 @@ function buildEnhancedRecordingData() {
             fieldData.options = fieldInfo.options;
           }
 
-          // Include captured value if available (not sensitive)
-          if (trackedValue && !isSensitiveField(fieldInfo.name)) {
-            fieldData.value = trackedValue.value;
+          // Include captured value if available (not sensitive).
+          // trackedFields stores the raw value (string/boolean), not an object.
+          if (trackedValue !== undefined && trackedValue !== null && !isSensitiveField(fieldInfo.name)) {
+            fieldData.value = trackedValue;
+          }
+
+          // For radio/checkbox, also include the live checked state from the DOM
+          // (the scanForms snapshot may be stale if the user changed the selection
+          // after the last page-transition rescan).
+          if (field && (fieldInfo.type === 'radio' || fieldInfo.type === 'checkbox')) {
+            fieldData.checked = field.checked;
           }
 
           return fieldData;
