@@ -156,3 +156,5 @@ convert -background none -resize 128x128 icon.svg icon128.png
 - Session cookies are stored by Chrome's cookie system
 - Extension uses HTTPS for production endpoints
 - Sensitive form fields (passwords, credit cards) are not tracked
+
+<!-- monorepo-sync round-trip test 2026-08-17 -->
